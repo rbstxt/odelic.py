@@ -103,6 +103,41 @@ def parse_ping_response(p: bytes):
     return Device(vaddr=p[12:16], mac=mac, product=product, version="%d.%d.%d" % (product, p[18], p[19]))
 
 
+MSG_STATUS_RESPONSES = (0x71, 0x35)   # STATUS_MAIN / STATE_RESPONSE_FD
+
+
+@dataclass
+class LightState:
+    vaddr: bytes
+    on: bool
+    x: int
+    y: int
+
+    @property
+    def color(self):
+        """0 = warm .. 100 = cool, None if unknown (light reports a plain 'on')."""
+        return None if not self.on or self.x > X_MAX else self.x * 5
+
+    @property
+    def brightness(self):
+        """1..100 %, 0 when off, None if unknown."""
+        if not self.on:
+            return 0
+        return None if self.y > Y_MAX else 100 - self.y * 5
+
+    def as_dict(self):
+        return {"vaddr": self.vaddr.hex(), "on": self.on, "color": self.color,
+                "brightness": self.brightness, "x": self.x, "y": self.y}
+
+
+def parse_status(p: bytes):
+    """Status reply (MeshBlePresenter.syncState): 03 <dst4> <ch> <src4> 71 <x> <y> ..."""
+    if len(p) < 13 or p[0] != 0x03 or p[10] not in MSG_STATUS_RESPONSES:
+        return None
+    x, y = p[11], p[12]
+    return LightState(vaddr=p[6:10], on=(x, y) != XY_OFF, x=x, y=y)
+
+
 def parse_app_id(app_id: str):
     """The app shows 'ID:<HomeID><4-char password>', e.g. 'ID:12345678' -> (1234, '5678')."""
     s = app_id.strip()

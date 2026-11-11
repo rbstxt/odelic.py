@@ -44,7 +44,8 @@ class OdelicMesh:
         self.own = None                 # our vaddr in the mesh (assigned at login)
         self.node_name = None
         self._client = None
-        self._rx = asyncio.Queue()
+        self._rx = None
+        self._logging_in = False
         self._seg = bytearray()
         self._seg_seq = 0
         self._listeners = []
@@ -71,7 +72,10 @@ class OdelicMesh:
     async def connect(self, timeout=10.0):
         dev = await self._resolve_device()
         self.node_name = getattr(dev, "name", None) or str(dev)
-        self._client = BleakClient(dev)
+        self.own = None
+        self._rx = asyncio.Queue()
+        self._logging_in = True
+        self._client = BleakClient(dev, disconnected_callback=self._on_disconnect)
         await self._client.connect()
         try:
             await self._client.start_notify(UUID_NOTIFY, self._on_notify)
@@ -80,6 +84,16 @@ class OdelicMesh:
         except BaseException:
             await self.disconnect()
             raise
+        finally:
+            self._logging_in = False
+
+    @property
+    def is_connected(self):
+        return self._client is not None and self._client.is_connected and self.own is not None
+
+    def _on_disconnect(self, _client):
+        log.info("node disconnected")
+        self.own = None
 
     async def disconnect(self):
         if self._client is not None:
@@ -87,6 +101,7 @@ class OdelicMesh:
                 await self._client.disconnect()
             finally:
                 self._client = None
+                self.own = None
 
     async def _login(self):
         while True:
@@ -127,8 +142,9 @@ class OdelicMesh:
         except ValueError:
             log.debug("undecryptable packet %s", data.hex())
             return
-        self._rx.put_nowait(data)
-        for cb in self._listeners:
+        if self._logging_in:
+            self._rx.put_nowait(data)
+        for cb in list(self._listeners):
             cb(data)
 
     async def send(self, packet: bytes):
@@ -203,13 +219,21 @@ class OdelicMesh:
             self._listeners.remove(cb)
         return list(found.values())
 
-    async def request_status(self, target, timeout=2.0):
-        """Ask one light for its status; returns raw decrypted replies (format not decoded yet)."""
-        got = []
-        self._listeners.append(got.append)
+    async def status(self, target, timeout=3.0):
+        """Ask one light (vaddr) for its state. Returns protocol.LightState, or None on timeout."""
+        dst = P.vaddr(target)
+        fut = asyncio.get_running_loop().create_future()
+
+        def cb(p):
+            st = P.parse_status(p)
+            if st and st.vaddr == dst and not fut.done():
+                fut.set_result(st)
+
+        self._listeners.append(cb)
         try:
-            await self.send(P.status_request(self.own, P.vaddr(target)))
-            await asyncio.sleep(timeout)
+            await self.send(P.status_request(self.own, dst))
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            return None
         finally:
-            self._listeners.remove(got.append)
-        return got
+            self._listeners.remove(cb)
