@@ -150,6 +150,21 @@ class MeshCrypto:
         body = self._login.encrypt(pkcs7_pad(self.homeid + self.password + self.session))
         return bytes([0x01, 0x16, 0x03]) + body
 
+    def adopt_challenge(self, challenge: bytes) -> bool:
+        """Follow a login challenge we did not ask for.
+
+        The node switches to the session value of every new challenge, even when that login is
+        later refused with status 08. On macOS all processes share one BLE link per peripheral,
+        so another program logging in through the same link silently invalidates our session
+        unless we switch too. Returns True if the session changed.
+        """
+        plain = self._login.decrypt(challenge[:16])
+        if plain[:4] != self.homeid:
+            return False
+        changed = plain[4:8] != self.session
+        self.session = plain[4:8]
+        return changed
+
     def _xor(self, data):
         k = self.session
         return bytes(b ^ k[i % 4] for i, b in enumerate(data))

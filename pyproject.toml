@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "odelic"
-version = "0.2.0"
+version = "0.2.1"
 description = "Unofficial Python library for ODELIC Bluetooth lights (Pairlink connected-mesh)"
 readme = "README.md"
 license = "MIT"

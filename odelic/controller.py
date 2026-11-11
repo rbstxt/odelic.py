@@ -44,14 +44,35 @@ class Controller:
             try:
                 for attempt in (0, 1):
                     if not self.mesh.is_connected:
+                        log.info("connecting via %s", self.mesh.device or "strongest node")
                         await self.mesh.connect()
+                    elif self.mesh.suspect:
+                        log.info("session looks stale, resynchronising")
+                        try:
+                            await self.mesh.resync()
+                        except Exception as e:
+                            log.warning("resync failed (%s), reconnecting", e)
+                            await self.mesh.disconnect()
+                            continue
                     try:
-                        return await fn(self.mesh)
-                    except BleakError:
+                        res = await fn(self.mesh)
+                    except (BleakError, asyncio.TimeoutError) as e:
+                        log.warning("request failed (%s), reconnecting", e)
+                        await self.mesh.disconnect()
                         if attempt:
                             raise
-                        log.info("link lost, reconnecting")
-                        await self.mesh.disconnect()
+                        continue
+                    # status()/devices() return None on timeout: the session may have
+                    # switched under us (another controller logged in), so make sure
+                    # the link is live and retry once
+                    if res is None and not attempt:
+                        log.info("no reply, ensuring the session is live and retrying")
+                        try:
+                            await self.mesh.ensure_live()
+                        except Exception as e:
+                            log.warning("ensure_live failed (%s)", e)
+                        continue
+                    return res
             finally:
                 self._arm_idle()
 

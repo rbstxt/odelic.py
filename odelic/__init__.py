@@ -7,4 +7,4 @@ from .protocol import BROADCAST, Device, LightState, parse_app_id
 
 __all__ = ["OdelicMesh", "Controller", "Config", "find_nodes", "MeshCrypto", "LoginError",
            "BROADCAST", "Device", "LightState", "parse_app_id"]
-__version__ = "0.2.0"
+__version__ = "0.2.1"

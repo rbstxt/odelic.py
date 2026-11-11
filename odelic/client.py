@@ -1,6 +1,7 @@
 """BLE client for ODELIC lights (bleak)."""
 import asyncio
 import logging
+import time
 
 from bleak import BleakClient, BleakScanner
 
@@ -49,6 +50,8 @@ class OdelicMesh:
         self._seg = bytearray()
         self._seg_seq = 0
         self._listeners = []
+        self.last_rx = 0.0              # monotonic time of the last packet we could decrypt
+        self.suspect = False            # True when the session may be out of sync with the node
 
     # ------------------------------------------------------------ connection
     async def __aenter__(self):
@@ -86,13 +89,55 @@ class OdelicMesh:
             raise
         finally:
             self._logging_in = False
+        self.last_rx = time.monotonic()
+        self.suspect = False
+        log.info("logged in via %s (own vaddr %s)", self.node_name, self.own.hex())
+
+    async def resync(self, timeout=8.0):
+        """Re-run the login handshake on the existing link to pick up the node's current session.
+
+        The node answers 08 ("already logged in") but still switches to the new challenge's
+        session, which we answer too, so commands are understood again afterwards.
+        A status of 00 means the node forgot us (reboot); wait for the new vaddr then.
+        """
+        if self._client is None or not self._client.is_connected:
+            raise LoginError("not connected")
+        old_own = self.own
+        self._rx = asyncio.Queue()
+        self.own = None
+        self._logging_in = True
+        try:
+            await self._write(bytes([0x01, 0x20]))
+            await asyncio.wait_for(self._login(resync=True, old_own=old_own), timeout)
+        except BaseException:
+            if self.own is None:
+                self.own = old_own
+            raise
+        finally:
+            self._logging_in = False
+        self.suspect = False
+        log.warning("session resynchronised with %s (vaddr %s)",
+                    self.node_name, self.own.hex() if self.own else "?")
+
+    async def ensure_live(self, timeout=8.0):
+        """Make sure the link can talk to the node; resync/reconnect when it looks stale."""
+        if self._client is None or not self._client.is_connected or self.own is None:
+            await self.disconnect()
+            await self.connect()
+            return
+        if self.suspect:
+            try:
+                await self.resync(timeout)
+            except BaseException:
+                await self.disconnect()
+                await self.connect()
 
     @property
     def is_connected(self):
         return self._client is not None and self._client.is_connected and self.own is not None
 
     def _on_disconnect(self, _client):
-        log.info("node disconnected")
+        log.warning("node %s disconnected", self.node_name)
         self.own = None
 
     async def disconnect(self):
@@ -103,20 +148,31 @@ class OdelicMesh:
                 self._client = None
                 self.own = None
 
-    async def _login(self):
+    async def _login(self, resync=False, old_own=None):
+        answered = False
         while True:
             p = await self._rx.get()
             if p[:2] == b"\x02\x20" and len(p) >= 18:
                 await self._write(self.crypto.answer_challenge(p[2:18]))
-            elif p[:2] == b"\x02\x16":
-                if len(p) >= 3 and p[2] == 0x08:
+                answered = True
+            elif p[:2] == b"\x02\x16" and answered:
+                status = p[2] if len(p) >= 3 else None
+                if resync and status == 0x08:
+                    if self.own is None:
+                        self.own = old_own  # 08 keeps our existing login; no new vaddr is sent
+                    return
+                if status == 0x08:
                     raise LoginError("node is already in use by another controller "
                                      "(close the ODELIC app / turn off phone Bluetooth and retry)")
-                if len(p) < 3 or p[2] != 0:
+                if status != 0:
                     raise LoginError("login rejected (status %s)" % p[2:].hex())
-            elif p[:2] == b"\x01\x0a" and len(p) >= 6:
-                self.own = p[2:6]
-            if self.own is not None:
+                if resync:
+                    if self.own is not None and self.own != old_own:
+                        return  # 00 with a fresh vaddr arrived via _on_notify
+                    continue    # 00: wait for the new 01 0a vaddr assignment
+            if not resync and self.own is not None:
+                return
+            if resync and self.own is not None and self.own != old_own:
                 return
 
     # ------------------------------------------------------------ transport
@@ -138,12 +194,25 @@ class OdelicMesh:
                 return
             data, self._seg, self._seg_seq = bytes(self._seg), bytearray(), 0
         try:
-            data = self.crypto.decrypt(data)
+            plain = self.crypto.decrypt(data)
         except ValueError:
             log.debug("undecryptable packet %s", data.hex())
+            if self.own is not None and not self._logging_in:
+                self.suspect = True           # node encrypts with a session we do not have
             return
+        if plain is not data and plain[:1] == b"\x03":
+            self.last_rx = time.monotonic()
+        data = plain
+        if data[:2] == b"\x01\x0a" and len(data) >= 6:
+            self.own = data[2:6]
         if self._logging_in:
             self._rx.put_nowait(data)
+        elif data[:2] == b"\x02\x20" and len(data) >= 18 and self.own is not None:
+            # someone else (another process on this Mac shares the link) started a login:
+            # the node now uses that challenge's session, so follow it
+            if self.crypto.adopt_challenge(data[2:18]):
+                self.suspect = False
+                log.warning("another controller started a login on this link; following its session")
         for cb in list(self._listeners):
             cb(data)
 
