@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odelic"
+version = "0.1.0"
+description = "Unofficial Python library for ODELIC Bluetooth lights (Pairlink connected-mesh)"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["bleak>=0.21"]
+
+[project.scripts]
+odelic = "odelic.__main__:main"
+
+[tool.setuptools]
+packages = ["odelic"]
