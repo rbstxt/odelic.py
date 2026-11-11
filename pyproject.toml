@@ -1,14 +1,29 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "odelic"
-version = "0.1.0"
+version = "0.1.1"
 description = "Unofficial Python library for ODELIC Bluetooth lights (Pairlink connected-mesh)"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "rbstxt" }]
 requires-python = ">=3.9"
 dependencies = ["bleak>=0.21"]
+keywords = ["odelic", "bluetooth", "ble", "mesh", "lighting", "smart-home"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Home Automation",
+]
+
+[project.urls]
+Homepage = "https://github.com/rbstxt/odelic.py"
+Repository = "https://github.com/rbstxt/odelic.py"
+Issues = "https://github.com/rbstxt/odelic.py/issues"
 
 [project.scripts]
 odelic = "odelic.__main__:main"

@@ -11,6 +11,12 @@ ODELIC（オーデリック）の Bluetooth 照明を PC から操作するた�
 ## セットアップ
 
 ```sh
+pip install odelic
+```
+
+開発用（このリポジトリから）:
+
+```sh
 python3 -m venv .venv
 .venv/bin/pip install -e .
 ```
@@ -91,3 +97,7 @@ asyncio.run(main())
 ```sh
 .venv/bin/python -m unittest discover -s tests
 ```
+
+## ライセンス
+
+MIT License（[LICENSE](LICENSE)）
